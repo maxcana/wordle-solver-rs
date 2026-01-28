@@ -1,0 +1,9 @@
+extensive search (14855 words)
+
+bit stuff (debug): 
+    description: uses bitwise AND inside the O(n^3) loop. encodes 5 rules into a bitmask inside the O(n^2) loop, take an AND against cached bitmaps for each possible secret
+    time: 170000s ~ 180000s
+
+bit stuff (release): 
+    time: 15500s ~ 17000s
+    no multithreading btw

@@ -1,0 +1,7 @@
+the 5 rules of wordle
+
+rule #1. if the color is g, the word must have the letter in the same position
+rule #2. if the color is y, the word must not have the letter in the same position
+rule #3. if the color is b, the word must not have the letter in the same position
+rule #4. if the colors have multiple y and g for a letter, the word must have that letter at least that many times
+rule #5. if the color is b and there's a y or g for that letter, the word must have exactly y+g of that letter
