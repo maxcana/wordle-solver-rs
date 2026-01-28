@@ -47,9 +47,16 @@ fn main() {
     // let word: &str = vec[0];
     // let guess: &str = vec[1];
 
+    // note: according to this script, aahed eliminates 12567.58 words on avg??  now 12338.69 on avg.
+    // vs in python script aahed eliminates 13636.37 words on avg.
+
     let PG: Vec<[u8; 5]> = load_words("wordle_words.txt").iter().map(|str: &String| encode_word(str)).collect();
     let PS = PG.clone();
     let bitmap_cache: HashMap<[u8; 5], [u128; 3]> = PS.iter().map(|&word| word).zip(PS.iter().map(|&word| build_bitmap(word))).collect(); // absolute cinema
+
+    // println!("bitmap for ps {:?}", PS[0]);
+    // print_bitmap(&bitmap_cache[&PS[0]]);
+    // panic!();
 
     let mut GS: HashMap<[u8; 5], f32> = HashMap::new();
 
@@ -92,12 +99,18 @@ fn main() {
                 
                 // what quantities of this letter are disallowed? lets encode it
                 for count in 0..6 { 
-                    if ! if ltrs_with_maximum[ltr] {min == i} else {min <= i} {
+                    if ! if ltrs_with_maximum[ltr] {min == count} else {min <= count} {
                         // count section is from row 5 - row 10
                         write_bit(&mut bitmask, ltr as u8, count + 5)
                     };
                 }
             }
+            
+            // if(start_inst.elapsed().as_millis() > 5000){
+            //     println!("bitmask for guess {:?} with colors {:?} against secret {:?}", pg, colors, ps);
+            //     print_bitmap(&bitmask);
+            //     panic!();
+            // }
 
             // bitmask is finished. lets compare it against every possible secret.
 
@@ -143,7 +156,7 @@ fn build_bitmap(ps: [u8; 5]) -> [u128; 3] {
     // encode "letter" section + counts prep
     for (i,&ltr) in ps.iter().enumerate() {
         write_bit(&mut bitmap, ltr, i);
-        ltr_count[i] += 1;
+        ltr_count[ltr as usize] += 1;
     }
 
     // encode "counts" section
@@ -154,10 +167,23 @@ fn build_bitmap(ps: [u8; 5]) -> [u128; 3] {
     return bitmap;
 }
 
+fn print_bitmap(bits: &[u128; 3]) {
+    for r in 0..11 {
+        let mut row = String::with_capacity(11);
+
+        for c in 0..26 {
+            let bit_index = r * 26 + c;
+            row.push(if bits[bit_index / 128] & 1 << (127 - (bit_index % 128)) == 0 {'0'} else {'1'}); // fix this printing. its backwards. use 127 -!!
+        }
+
+        println!("{:0>4} {}", if r < 5 {("POS".to_string() + &r.to_string())} else if r <= 10 {("CNT".to_string() + &(r-5).to_string())} else {("EXT".to_string() + &(r-10).to_string())}, row);
+    }
+}
+
 /// make a bit at position bitnum become 1
-fn write_raw_bit(map: &mut[u128; 3], bitnum: usize){ map[bitnum / 128] = map[bitnum / 128] | (1u128 << (bitnum % 128)) }
+fn write_raw_bit(map: &mut[u128; 3], bitnum: usize){ map[bitnum / 128] = map[bitnum / 128] | (1u128 << (127 - (bitnum % 128))) }
 /// make a bit at position bitnum become 0
-fn delete_raw_bit(map: &mut[u128; 3], bitnum: usize){ map[bitnum / 128] = map[bitnum / 128] & !(1u128 << (bitnum % 128)) }
+fn delete_raw_bit(map: &mut[u128; 3], bitnum: usize){ map[bitnum / 128] = map[bitnum / 128] & !(1u128 << (127 -(bitnum % 128))) }
 
 /// #### write a solid segment of 1 bits into a bitmap or bitmask, using left (inclusive) and right (inclusive) bound parameters
 /// basically a workaround for not having a unsigned bigint. which is why this code looks intimidating, its just trying to make the array work as one biguint.
