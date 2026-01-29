@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, io::{self, Error}, time, usize};
+use std::{collections::HashMap, fs, io::{self, Error, Write}, time, usize};
 
 // design:
 // enter guess and result (eg. "crane _gy__")
@@ -28,6 +28,13 @@ fn load_words(file_path: &str) -> Vec<String> {
         Err(e) => {panic!("ur mega cooked buddy")}
     }
 }
+fn clear_lines(n: usize) {
+    let mut out = io::stdout();
+    for _ in 0..n {
+        write!(out, "\x1b[1A\r\x1b[2K").unwrap();
+    }
+    out.flush().unwrap();
+}
 fn input(query: &str) -> String{
     println!("{query}");
     let mut user_input: String = String::new();
@@ -47,16 +54,9 @@ fn main() {
     // let word: &str = vec[0];
     // let guess: &str = vec[1];
 
-    // note: according to this script, aahed eliminates 12567.58 words on avg??  now 12338.69 on avg.
-    // vs in python script aahed eliminates 13636.37 words on avg.
-
     let PG: Vec<[u8; 5]> = load_words("wordle_words.txt").iter().map(|str: &String| encode_word(str)).collect();
     let PS = PG.clone();
     let bitmap_cache: HashMap<[u8; 5], [u128; 3]> = PS.iter().map(|&word| word).zip(PS.iter().map(|&word| build_bitmap(word))).collect(); // absolute cinema
-
-    // println!("bitmap for ps {:?}", PS[0]);
-    // print_bitmap(&bitmap_cache[&PS[0]]);
-    // panic!();
 
     let mut GS: HashMap<[u8; 5], f32> = HashMap::new();
 
@@ -73,20 +73,20 @@ fn main() {
             
             // encode "positions" section of bitmask, while setting up minimums and maximums for "count" section
             for i in 0..5usize {
-                let (letter, color) = (pg[i], colors[i]);
+                let (letter, ltr, color) = (pg[i] as usize, pg[i], colors[i]);
 
                 match color {
                     0 => { //gray
-                        write_bit(&mut bitmask, letter, i);
-                        ltrs_with_maximum[pg[i] as usize] = true;
+                        write_bit(&mut bitmask, ltr, i);
+                        ltrs_with_maximum[letter] = true;
                     }
                     1 => { //yellow
-                        write_bit(&mut bitmask, letter, i);
-                        minimum_of_ltr[pg[i] as usize] += 1;
+                        write_bit(&mut bitmask, ltr, i);
+                        minimum_of_ltr[letter] += 1;
                     }
                     2 => { //green
-                        write_row_excluding_bit(&mut bitmask, letter, i);
-                        minimum_of_ltr[pg[i] as usize] += 1;
+                        write_row_excluding_bit(&mut bitmask, ltr, i);
+                        minimum_of_ltr[letter] += 1;
                     }
                     _ => {panic!()}
                 }  
@@ -105,13 +105,6 @@ fn main() {
                     };
                 }
             }
-            
-            // if(start_inst.elapsed().as_millis() > 5000){
-            //     println!("bitmask for guess {:?} with colors {:?} against secret {:?}", pg, colors, ps);
-            //     print_bitmap(&bitmask);
-            //     panic!();
-            // }
-
             // bitmask is finished. lets compare it against every possible secret.
 
             let mut elim: u32 = 0;
@@ -122,14 +115,16 @@ fn main() {
             }
             total_elim += elim;
         }
+        
+        // printing
+        if total_elim > 0 { clear_lines(2) };
         let avg_elim: f32 = total_elim as f32 / PS.len() as f32;
-        println!("guess {} eliminates {:.2} words on average", decode_word(pg).to_ascii_uppercase(), avg_elim);
+        println!("Guess {} eliminates {:.2} words on average", decode_word(pg).to_ascii_uppercase(), avg_elim);
         GS.insert(*pg, avg_elim);
 
-        // time estimates
         let amount_finished: f64 = GS.len() as f64 / PG.len() as f64;
         let elapsed: f64 = start_inst.elapsed().as_secs_f64();
-        println!("estimated time remaining: {:.1}s", elapsed / amount_finished);
+        println!("Progress: {:.2}%. Time remaining: {:.0}s. Counted: {} / {}", amount_finished * 100f64, elapsed / amount_finished, GS.len(), PG.len());
 
     }
 
@@ -141,13 +136,13 @@ fn main() {
 // this way we only calculate the rules [1 times] while encoding, and do bitwise AND [14855 times] instead of calculating the rules [14855 times]
 // this is Ingenious
 
-// dogma function // (we design our algorithm based on this being true)
 /// #### check whether a possible secret is valid based on encoded information
 /// bitmask: INFORMATION (encoded guess and colors). bitmap: possible secret to check validity of
 fn bitmaps_match(bitmask: &[u128; 3], bitmap: &[u128; 3]) -> bool {
     bitmask.iter().zip(bitmap.iter()).all(|(&b, &m)| b & m == 0)
 }
 
+/// takes word and returns bitmap complementary to the information bitmask such that taking an AND can check validity of the word as a secret (see design image pls [red map on diagram])
 fn build_bitmap(ps: [u8; 5]) -> [u128; 3] {
     let mut bitmap: [u128; 3] = [0,0,0];
     
@@ -160,7 +155,7 @@ fn build_bitmap(ps: [u8; 5]) -> [u128; 3] {
     }
 
     // encode "counts" section
-    for ltr in ps {
+    for ltr in 0..26u8 {
         write_bit(&mut bitmap, ltr, 5 + ltr_count[ltr as usize] as usize);
     }
 
@@ -173,7 +168,7 @@ fn print_bitmap(bits: &[u128; 3]) {
 
         for c in 0..26 {
             let bit_index = r * 26 + c;
-            row.push(if bits[bit_index / 128] & 1 << (127 - (bit_index % 128)) == 0 {'0'} else {'1'}); // fix this printing. its backwards. use 127 -!!
+            row.push(if bits[bit_index / 128] & 1 << (127 - (bit_index % 128)) == 0 {'0'} else {'1'});
         }
 
         println!("{:0>4} {}", if r < 5 {("POS".to_string() + &r.to_string())} else if r <= 10 {("CNT".to_string() + &(r-5).to_string())} else {("EXT".to_string() + &(r-10).to_string())}, row);
@@ -236,7 +231,6 @@ fn write_row_excluding_bit(map: &mut[u128; 3], letter_excl: u8, row: usize){
 fn get_colors(guess: &[u8; 5], secret: &[u8; 5]) -> [u8; 5]{
     let mut colors: [u8; 5] = [0,0,0,0,0];
 
-
     // used for populating colors with yellows at the end. tracks how many yellows are needed
     let mut how_many_yellows: [u8; 26] = [0; 26];
 
@@ -257,7 +251,7 @@ fn get_colors(guess: &[u8; 5], secret: &[u8; 5]) -> [u8; 5]{
         // we can make it yellow because were are sure it is not in this position already.
         if how_many_yellows[ltr as usize] > 0 && colors[i] == 0 {
             colors[i] = 1;
-            how_many_yellows[secret[i] as usize] -= 1;
+            how_many_yellows[ltr as usize] -= 1;
         }
     }
 

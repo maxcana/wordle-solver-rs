@@ -1,0 +1,91 @@
+DEBUGGING: why is the rust output different; eliminating less words?
+
+rust output
+guess AAHED eliminates 11992.08 words on average
+estimated time remaining: 29602.9s
+guess AALII eliminates 11146.48 words on average
+estimated time remaining: 31375.4s
+
+python output
+starting 1 threads
+Guess AAHED eliminates 13636.37 words on average.
+Progress: 0.0%. Time remaining: 328016s. Counted: 1 / 14855
+starting 1 threads
+Guess AALII eliminates 12974.71 words on average.
+Progress: 0.0%. Time remaining: 323213s. Counted: 2 / 14855
+
+python aahed(bgygb) vs hares: 
+['caneh', 'hacek', 'hajes', 'hakes', 'haler', 'hales', 'hamel', 'hames', 'harem', 'hares', 'hater', 'hates', 'havel', 'haven', 'haver', 'haves', 'hayer', 'hayey', 'hazel', 'hazer', 'hazes', 'kaneh', 'maneh']
+
+rust aahed(bgygb) vs hares:
+["hates", "cages", "raper", "raree", "bares", "vaper", "hazel", "vares", "ramee", "eales", "jakes", "taler", "panes", "faces", 
+"hales", "paler", "ravey", "hakes", "eager", "ganef", "eaver", "canes", "facet", "cagey", "maneb", "payer", "ranes", "easer", 
+"babes", "bases", "oarer", "kanes", "hacek", "lames", "vales", "tapen", "tawer", "vases", "jakey", "rages", "haves", "vaxes", 
+"tales", "lases", "saree", "razee", "maleo", "kaneh", "males", "carex", "manet", "naker", "baser", "cames", "wases", "camel", 
+"wares", "paseo", "bayer", "lacer", "maneh", "hater", "pareo", "haven", "rawer", "waxes", "payee", "sages", "gaper", "cavel", 
+"rafee", "caber", "jaker", "kames", "cakey", "fakes", "kales", "gages", "karez", "macer", "ganev", "mabes", "yages", "sawer", 
+"latex", "maker", "hayer", "caner", "zazen", "wakes", "waker", "waler", "nates", "farer", "navew", "sames", "tajes", "haver", 
+"naieo", "mazey", "wavey", "pares", "saxes", "taper", "japes", "sales", "saker", "cases", "tamer", "cakes", "mazes", "caneh", 
+"cates", "waney", "water", "james", "gazer", "tares", "taxes", "maces", "saner", "razet", "janes", "eaten", "favel", "sates", 
+"facey", "safes", "rares", "palet", "taxer", "eater", "gayer", "laker", "pages", "haler", "fales", "pales", "paven", "lamer", 
+"vapes", "yamen", "taber", "havel", "baler", "pawer", "sabes", "gavel", "sager", "gates", "fates", "parer", "yales", "oaten", 
+"ramen", "laser", "racer", "gares", "tames", "rales", "maser", "lakes", "warez", "hares", "savey", "yarer", "cares", "pacey", 
+"faker", "capex", "rarer", "taver", "saves", "rager", "hazes", "raven", "sayer", "laxes", "hayey", "takes", "waxer", "gases", 
+"lacey", "caper", "samey", "caves", "layer", "waver", "rates", "oaken", "bates", "japer", "mares", "waken", "gamey", "gazes", 
+"sanes", "razer", "caser", "samel", "mazel", "pacer", "carer", "fayer", "taces", "paten", "papes", "baken", "tates", "mapes", 
+"pates", "capes", "paren", "lares", "ragee", "paces", "babel", "tabes", "laces", "nages", "tacet", "banes", "mazer", "fanes", 
+"saber", "kaies", "safer", "taker", "wager", "faxes", "oaves", "eases", "wafer", "bagel", "ravel", "pareu", "pater", "label", 
+"samek", "paver", "rakes", "sayee", "cater", "mazet", "varec", "nazes", "paves", "fares", "maven", "raser", "laten", "patel", 
+"bayes", "yager", "lapel", "hazer", "saser", "hames", "cameo", "rames", "zaxes", "waves", "ramet", "vanes", "valet", "jasey", 
+"makes", "wales", "samen", "yawey", "barer", "rajes", "taken", "raves", "hajes", "faves", "wames", "javel", "laree", "raxes", 
+"matey", "ratel", "mages", "lacet", "mamey", "paper", "facer", "gater", "gamer", "names", "bales", "pager", "saver", "wawes", 
+"tater", "makee", "wages", "oaker", "faver", "oater", "jacet", "rapes", "parev", "laxer", "easel", "mater", "naves", "patee", 
+"lawer", "tapet", "rases", "mases", "nares", "fames", "bakes", "caret", "razes", "rapee", "baker", "salep", "namer", "gales", 
+"waxen", "mamee", "sazes", "mates", "paxes", "lanes", "oases", "satem", "manes", "fazes", "basen", "nabes", "wanes", "maxes", 
+"panel", "laver", "raver", "salet", "jager", "caver", "cager", "later", "fakey", "lager", "eaves", "rakee", "lazes", "rater", 
+"gager", "napes", "ranee", "sater", "laves", "pases", "papey", "taser", "raker", "gapes", "races", "games", "yates", "navel", 
+"hamel", "karee", "jaleo", "tases", "sakes", "harem", "cafes", "tapes"]
+
+it doesnt seem to know there must be an h. that's weird... lets look at the counts encoding on the bitmask for yellows.
+bitmask for guess aahed with colors [0, 2, 1, 2, 0] against secret hares
+POS0 10000000000000000000000000
+POS1 01111111111111111111111111
+POS2 00000001000000000000000000
+POS3 11110111111111111111111111
+POS4 00010000000000000000000000
+CNT0 10001001000000000000000000
+CNT1 00010000000000000000000000
+CNT2 10010000000000000000000000
+CNT3 10010000000000000000000000
+CNT4 10010000000000000000000000
+CNT5 10010000000000000000000000
+well, on the CNT0, there is a 1 bit for the h, so this is correct.
+lets check the bitmap for "hares" next.
+
+bitmap for ps hares (via print_bitmap(&bitmap_cache[&PS[PS.iter().position(|arr| {decode_word(arr) == "hares"}).unwrap()]]);)
+POS0 00000001000000000000000000
+POS1 10000000000000000000000000
+POS2 00000000000000000100000000
+POS3 00001000000000000000000000
+POS4 00000000000000000010000000
+CNT0 00000000000000000000000000
+CNT1 10001001000000000110000000
+CNT2 00000000000000000000000000
+CNT3 00000000000000000000000000
+CNT4 00000000000000000000000000
+CNT5 00000000000000000000000000
+
+oh ok, the problem is there are no 1s filling out the CNT0 row in the ps bitmap.
+ok, fixed, and now we eliminated 14832 words in that situation 14855-14832 = 23 valid words left.
+lets check against python script.
+yep, it matches the length of the python script exactly.
+
+new release log
+guess AAHED eliminates 13636.37 words on average
+estimated time remaining: 22960.4s
+guess AALII eliminates 12974.71 words on average
+estimated time remaining: 26305.6s
+guess AAPAS eliminates 13197.79 words on average
+estimated time remaining: 27012.4s
+
+matches exactly with python, epic
