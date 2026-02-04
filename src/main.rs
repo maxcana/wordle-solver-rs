@@ -1,4 +1,6 @@
-use std::{collections::HashMap, fs, io::{self, Error, Write}, time, usize};
+use std::{collections::HashMap, fs, io::{self, Error, Write}, sync::mpsc, thread::{self, JoinHandle}, time::{self, Instant}, usize};
+
+static THREADS: usize = 8;
 
 // design:
 // enter guess and result (eg. "crane _gy__")
@@ -14,7 +16,7 @@ use std::{collections::HashMap, fs, io::{self, Error, Write}, time, usize};
 // calculate avg words eliminated
 // we'll validate possible secrets based on info using bitmaps
 
-// MARK: main
+// MARK: Helpers
 
 fn load_words(file_path: &str) -> Vec<String> {
     let content: Result<String, Error> = fs::read_to_string(file_path);
@@ -47,6 +49,26 @@ fn encode_word(input: &str) -> [u8; 5] {
 fn decode_word(input: &[u8; 5]) -> String {
     String::from_utf8(input.map(|byte| byte + 97u8).to_vec()).unwrap()
 }
+#[derive(Copy, Clone)]
+struct GuessScore {
+    total_elim: u32,
+    avg_elim: f32,
+}
+impl GuessScore {
+    fn print(self, pg: &[u8;5], counted: u32, total: u32, start_inst: &Instant){
+        if self.total_elim > 0 { clear_lines(2); }
+        println!("Guess {} eliminates {:.2} words on average", decode_word(pg).to_ascii_uppercase(), self.avg_elim);
+        let amount_finished: f64 = counted as f64 / total as f64;
+        let elapsed: f64 = start_inst.elapsed().as_secs_f64();
+        println!("Progress: {:.2}%. Time remaining: {:.0}s. Counted: {} / {}", amount_finished * 100f64, elapsed / amount_finished, counted, total);
+    }
+    fn handle_scored_guess(self, GS: &mut HashMap<[u8;5], GuessScore>, pg: &[u8; 5], counted: &mut u32, total: u32, start_inst: &Instant){
+        self.print(pg, {*counted += 1; *counted}, total, &start_inst);
+        GS.insert(*pg, self.clone());
+    }
+}
+
+// MARK: Multithreading
 fn main() {
     // let inp: String = input("Enter guess and result (eg. \"crane _gy__\"").trim().to_lowercase();
     // let vec: Vec<&str> = inp.split(" ").collect();
@@ -56,15 +78,61 @@ fn main() {
 
     let PG: Vec<[u8; 5]> = load_words("wordle_words.txt").iter().map(|str: &String| encode_word(str)).collect();
     let PS = PG.clone();
-    let bitmap_cache: HashMap<[u8; 5], [u128; 3]> = PS.iter().map(|&word| word).zip(PS.iter().map(|&word| build_bitmap(word))).collect(); // absolute cinema
+    let BITMAP_CACHE: HashMap<[u8; 5], [u128; 3]> = PS.iter().map(|&word| word).zip(PS.iter().map(|&word| build_bitmap(word))).collect(); // absolute cinema
+    
+    let mut PG_SPLITS: Vec<Vec<[u8; 5]>> = (0..THREADS).map(|_| Vec::with_capacity(PG.len()/THREADS+1)).collect();
+    PG.iter().enumerate().for_each(|(i,item)| PG_SPLITS[i % THREADS].push(*item));
 
-    let mut GS: HashMap<[u8; 5], f32> = HashMap::new();
+    let (tx, rx) = mpsc::channel::<([u8; 5], GuessScore)>();
+    let mut threads = Vec::<JoinHandle<HashMap<[u8; 5], GuessScore>>>::new();
+    let start_inst = time::Instant::now(); let mut counted: u32 = 0; let total: u32 = PG.len() as u32;
+    println!("Starting {} threads...", THREADS);
+    for i in 1..THREADS {
+        // need to explicitly define new variables. it won't work if it captures PG_SPLITS or PS, etc. because the thread may start after they're dropped.
+        let cap_tx = tx.clone();
+        let cap_PG_SPLITS = PG_SPLITS[i].clone();
+        let cap_PS = PS.clone();
+        let cap_BITMAP_CACHE = BITMAP_CACHE.clone();
+        threads.push(thread::spawn(move || solve(&cap_PG_SPLITS, &cap_PS, &cap_BITMAP_CACHE, |pg, guess_score| {
+            cap_tx.send((*pg, guess_score)).unwrap();
+        })));
+    }
+    
+    let mut GS: HashMap<[u8;5], GuessScore> = HashMap::new();
+    // use the main thread to solve, and check for the other threads' results
+    solve(&PG_SPLITS[0], &PS, &BITMAP_CACHE, |pg, guess_score| {
+           guess_score.handle_scored_guess(&mut GS, pg, &mut counted, total, &start_inst);
+            while let Ok(s) = rx.try_recv() {
+                s.1.handle_scored_guess(&mut GS, &s.0, &mut counted, total, &start_inst);
+            }
+        }
+    );
+    // check every little while for new guess scores
+    // while waiting for all other threads to complete
+    while counted < total {
+        let sc = rx.recv();
+        match sc {
+            Ok(s) => s.1.handle_scored_guess(&mut GS, &s.0, &mut counted, total, &start_inst),
+            Err(_) => break
+        }
+    }
 
-    let start_inst = time::Instant::now();
-    for pg in &PG {
+    let mut GS_VEC = GS.iter().collect::<Vec<(&[u8; 5], &GuessScore)>>();
+    GS_VEC.sort_by(|a,b| (&a.1.total_elim).cmp(&b.1.total_elim));
+    // print best guesses
+    for i in 0..5 {
+        println!("#{} Guess {} eliminates {:.2} words on average", (i+1), decode_word(GS_VEC[i].0).to_ascii_uppercase(), GS_VEC[i].1.avg_elim);
+    }
+
+}
+
+// MARK: Solver
+fn solve(PG: &Vec<[u8;5]>, PS: &Vec<[u8; 5]>, BITMAP_CACHE: &HashMap<[u8; 5], [u128; 3]>, mut on_guess_scored: impl FnMut(&[u8;5], GuessScore)) -> HashMap<[u8;5],GuessScore> {
+    let mut GS: HashMap<[u8; 5], GuessScore> = HashMap::new();
+    for pg in PG {
         let mut total_elim: u32 = 0;
 
-        for ps in &PS {
+        for ps in PS {
             let colors: [u8; 5] = get_colors(pg, ps);
             
             let mut bitmask: [u128; 3] = [0,0,0]; // 1 bitmap is 26 * 11 bits = 282 bits
@@ -108,26 +176,18 @@ fn main() {
             // bitmask is finished. lets compare it against every possible secret.
 
             let mut elim: u32 = 0;
-            for (ps, bitmap) in &bitmap_cache {
+            for (ps, bitmap) in BITMAP_CACHE {
                 if !bitmaps_match(&bitmask, bitmap) {
                     elim += 1;
                 }
             }
             total_elim += elim;
         }
-        
-        // printing
-        if total_elim > 0 { clear_lines(2) };
         let avg_elim: f32 = total_elim as f32 / PS.len() as f32;
-        println!("Guess {} eliminates {:.2} words on average", decode_word(pg).to_ascii_uppercase(), avg_elim);
-        GS.insert(*pg, avg_elim);
-
-        let amount_finished: f64 = GS.len() as f64 / PG.len() as f64;
-        let elapsed: f64 = start_inst.elapsed().as_secs_f64();
-        println!("Progress: {:.2}%. Time remaining: {:.0}s. Counted: {} / {}", amount_finished * 100f64, elapsed / amount_finished, GS.len(), PG.len());
-
+        on_guess_scored(pg, GuessScore { total_elim, avg_elim });
+        GS.insert(*pg, GuessScore { total_elim, avg_elim });
     }
-
+    GS
 }
 
 // MARK: bit stuff
