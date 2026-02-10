@@ -7,3 +7,6 @@ bit stuff (debug):
 bit stuff (release): 
     time: 15500s ~ 17000s
     no multithreading btw
+
+multithreading w/ 12 threads:
+    time: 1650s ~ 1750s

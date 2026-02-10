@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs, io::{self, Error, Write}, sync::mpsc, thread::{self, JoinHandle}, time::{self, Instant}, usize};
 
-static THREADS: usize = 8;
+static THREADS: usize = 12;
 
 // design:
 // enter guess and result (eg. "crane _gy__")
