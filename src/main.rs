@@ -1,6 +1,9 @@
-use std::{collections::HashMap, fs, io::{self, Error, Write}, sync::mpsc, thread::{self, JoinHandle}, time::{self, Instant}, usize};
+use std::{collections::HashMap, fs, io::{self, BufWriter, Error, Write}, sync::mpsc, thread::{self, JoinHandle}, time::{self, Instant}, usize};
 
 static THREADS: usize = 12;
+static CALCULATE_INITIALLY: bool = false;
+static SHOW_TOP_X_GUESSES: usize = 5;
+static PRINT_WORST_GUESS: bool = true;
 
 // design:
 // enter guess and result (eg. "crane _gy__")
@@ -38,7 +41,7 @@ fn clear_lines(n: usize) {
     out.flush().unwrap();
 }
 fn input(query: &str) -> String{
-    println!("{query}");
+    eprint!("{query}");
     let mut user_input: String = String::new();
     io::stdin().read_line(&mut user_input).expect("Failed to read user input");
     user_input
@@ -56,72 +59,125 @@ struct GuessScore {
 }
 impl GuessScore {
     fn print(self, pg: &[u8;5], counted: u32, total: u32, start_inst: &Instant){
-        if self.total_elim > 0 { clear_lines(2); }
-        println!("Guess {} eliminates {:.2} words on average", decode_word(pg).to_ascii_uppercase(), self.avg_elim);
+        // all of this for "atomic" printing. so you dont see it print each line individually. it just clears, prints both, then renders
+        let mut out = BufWriter::new(io::stdout().lock());
+        for i in 0..2 { write!(out, "\x1b[1A\r\x1b[2K").unwrap(); }
+        writeln!(out, "Guess {} eliminates {:.2} words on average", decode_word(pg).to_ascii_uppercase(), self.avg_elim).unwrap();
         let amount_finished: f64 = counted as f64 / total as f64;
         let elapsed: f64 = start_inst.elapsed().as_secs_f64();
-        println!("Progress: {:.2}%. Time remaining: {:.0}s. Counted: {} / {}", amount_finished * 100f64, elapsed / amount_finished, counted, total);
+        writeln!(out, "Progress: {:.2}%. Time remaining: {:.0}s. Counted: {} / {}", amount_finished * 100f64, elapsed / amount_finished, counted, total).unwrap();
+        
+        out.flush().unwrap();
     }
     fn handle_scored_guess(self, GS: &mut HashMap<[u8;5], GuessScore>, pg: &[u8; 5], counted: &mut u32, total: u32, start_inst: &Instant){
         self.print(pg, {*counted += 1; *counted}, total, &start_inst);
         GS.insert(*pg, self.clone());
     }
 }
+fn prepare_for_printing_guess_scores() {
+    // so it clears these empty lines on the first iteration
+    for i in 0..2 { println!() }
+}
+
+fn obtain_user_info_and_eliminate_PS(PS: &mut Vec<[u8; 5]>, BITMAP_CACHE: &HashMap<[u8; 5], [u128; 3]>) {
+    while true {
+        let inp: String = input("Enter guess and result (lares __g_y): ").trim().to_lowercase();
+        if(inp.len() != 11 || inp.chars().nth(5).unwrap() != ' ' || !inp.chars().take(5).all(|c| c.is_ascii_alphabetic())) {
+            println!("invalid input");
+            continue
+        }
+
+        let vec: Vec<&str> = inp.split(" ").collect();
+        let guess_inp: &str = vec[0];
+        let colors_inp: &str = vec[1];
+        
+        let mut guess: [u8; 5] = [0; 5];
+        for i in 0..5 {
+            guess[i] = guess_inp.to_ascii_lowercase().chars().nth(i).unwrap() as u8 - 'a' as u8;
+        }
+        let mut colors: [u8; 5] = [0; 5];
+        for i in 0..5 {
+            colors[i] = match colors_inp.chars().nth(i).unwrap() {'_' => 0, 'y' => 1, 'g' => 2, _ => 0};
+        }
+        
+        let elimination_info = build_bitmask(&guess, &colors);
+
+        let old_PS_len = PS.len();
+        let new_PS: Vec<[u8; 5]> = PS.iter().filter(|&ps| bitmaps_match(&elimination_info, &BITMAP_CACHE[ps])).cloned().collect();
+        let new_PS_len = new_PS.len();
+        if(new_PS_len == 0) {
+            println!("that would eliminate every word, did you make a mistake?");
+            continue
+        }
+        *PS = new_PS;
+
+        println!("Filtered possible secrets: {} -> {} (-{})", old_PS_len, new_PS_len, old_PS_len - new_PS_len);
+        break
+    }
+}
+
 
 // MARK: Multithreading
 fn main() {
-    // let inp: String = input("Enter guess and result (eg. \"crane _gy__\"").trim().to_lowercase();
-    // let vec: Vec<&str> = inp.split(" ").collect();
-
-    // let word: &str = vec[0];
-    // let guess: &str = vec[1];
-
     let PG: Vec<[u8; 5]> = load_words("wordle_words.txt").iter().map(|str: &String| encode_word(str)).collect();
-    let PS = PG.clone();
+    let mut PS: Vec<[u8; 5]> = PG.clone();
     let BITMAP_CACHE: HashMap<[u8; 5], [u128; 3]> = PS.iter().map(|&word| word).zip(PS.iter().map(|&word| build_bitmap(word))).collect(); // absolute cinema
     
     let mut PG_SPLITS: Vec<Vec<[u8; 5]>> = (0..THREADS).map(|_| Vec::with_capacity(PG.len()/THREADS+1)).collect();
     PG.iter().enumerate().for_each(|(i,item)| PG_SPLITS[i % THREADS].push(*item));
 
-    let (tx, rx) = mpsc::channel::<([u8; 5], GuessScore)>();
-    let mut threads = Vec::<JoinHandle<HashMap<[u8; 5], GuessScore>>>::new();
-    let start_inst = time::Instant::now(); let mut counted: u32 = 0; let total: u32 = PG.len() as u32;
-    println!("Starting {} threads...", THREADS);
-    for i in 1..THREADS {
-        // need to explicitly define new variables. it won't work if it captures PG_SPLITS or PS, etc. because the thread may start after they're dropped.
-        let cap_tx = tx.clone();
-        let cap_PG_SPLITS = PG_SPLITS[i].clone();
-        let cap_PS = PS.clone();
-        let cap_BITMAP_CACHE = BITMAP_CACHE.clone();
-        threads.push(thread::spawn(move || solve(&cap_PG_SPLITS, &cap_PS, &cap_BITMAP_CACHE, |pg, guess_score| {
-            cap_tx.send((*pg, guess_score)).unwrap();
-        })));
-    }
-    
-    let mut GS: HashMap<[u8;5], GuessScore> = HashMap::new();
-    // use the main thread to solve, and check for the other threads' results
-    solve(&PG_SPLITS[0], &PS, &BITMAP_CACHE, |pg, guess_score| {
-           guess_score.handle_scored_guess(&mut GS, pg, &mut counted, total, &start_inst);
-            while let Ok(s) = rx.try_recv() {
-                s.1.handle_scored_guess(&mut GS, &s.0, &mut counted, total, &start_inst);
+    let mut runs: usize = 0;
+    while true {
+        runs += 1;
+        if runs > 1 || !CALCULATE_INITIALLY {
+            // prompt user
+            obtain_user_info_and_eliminate_PS(&mut PS, &BITMAP_CACHE);
+        }
+
+        let (tx, rx) = mpsc::channel::<([u8; 5], GuessScore)>();
+        let mut threads = Vec::<JoinHandle<HashMap<[u8; 5], GuessScore>>>::new();
+        let start_inst = time::Instant::now(); let mut counted: u32 = 0; let total: u32 = PG.len() as u32;
+        println!("Starting {} threads...", THREADS);
+        for i in 1..THREADS {
+            // need to explicitly define new variables. it won't work if it captures PG_SPLITS or PS, etc. because the thread may start after they're dropped.
+            let cap_tx = tx.clone();
+            let cap_PG_SPLITS = PG_SPLITS[i].clone();
+            let cap_PS = PS.clone();
+            let cap_BITMAP_CACHE = BITMAP_CACHE.clone();
+            threads.push(thread::spawn(move || solve(&cap_PG_SPLITS, &cap_PS, &cap_BITMAP_CACHE, |pg, guess_score| {
+                cap_tx.send((*pg, guess_score)).unwrap();
+            })));
+        }
+        
+        prepare_for_printing_guess_scores();
+        let mut GS: HashMap<[u8;5], GuessScore> = HashMap::with_capacity(14855);
+        // use the main thread to solve, and check for the other threads' results
+        solve(&PG_SPLITS[0], &PS, &BITMAP_CACHE, |pg, guess_score| {
+            guess_score.handle_scored_guess(&mut GS, pg, &mut counted, total, &start_inst);
+                while let Ok(s) = rx.try_recv() {
+                    s.1.handle_scored_guess(&mut GS, &s.0, &mut counted, total, &start_inst);
+                }
+            }
+        );
+        // check every little while for new guess scores
+        // while waiting for all other threads to complete
+        while counted < total {
+            let sc = rx.recv();
+            match sc {
+                Ok(s) => s.1.handle_scored_guess(&mut GS, &s.0, &mut counted, total, &start_inst),
+                Err(_) => break
             }
         }
-    );
-    // check every little while for new guess scores
-    // while waiting for all other threads to complete
-    while counted < total {
-        let sc = rx.recv();
-        match sc {
-            Ok(s) => s.1.handle_scored_guess(&mut GS, &s.0, &mut counted, total, &start_inst),
-            Err(_) => break
-        }
-    }
 
-    let mut GS_VEC = GS.iter().collect::<Vec<(&[u8; 5], &GuessScore)>>();
-    GS_VEC.sort_by(|a,b| (&a.1.total_elim).cmp(&b.1.total_elim));
-    // print best guesses
-    for i in 0..5 {
-        println!("#{} Guess {} eliminates {:.2} words on average", (i+1), decode_word(GS_VEC[i].0).to_ascii_uppercase(), GS_VEC[i].1.avg_elim);
+        let mut GS_VEC = GS.iter().collect::<Vec<(&[u8; 5], &GuessScore)>>();
+        GS_VEC.sort_by(|a,b| (&b.1.total_elim).cmp(&a.1.total_elim));
+        // print best guesses
+        for i in 0..SHOW_TOP_X_GUESSES {
+            println!("#{} Guess {} eliminates {:.2} words on average", (i+1), decode_word(GS_VEC[i].0).to_ascii_uppercase(), GS_VEC[i].1.avg_elim);
+        }
+        if PRINT_WORST_GUESS {
+            println!("Worst Guess {} eliminates {:.2} words on average", decode_word(GS_VEC.last().unwrap().0).to_ascii_uppercase(), GS_VEC.last().unwrap().1.avg_elim);
+        }
     }
 
 }
@@ -135,44 +191,8 @@ fn solve(PG: &Vec<[u8;5]>, PS: &Vec<[u8; 5]>, BITMAP_CACHE: &HashMap<[u8; 5], [u
         for ps in PS {
             let colors: [u8; 5] = get_colors(pg, ps);
             
-            let mut bitmask: [u128; 3] = [0,0,0]; // 1 bitmap is 26 * 11 bits = 282 bits
-            let mut minimum_of_ltr: [u8; 26] = [0; 26];
-            let mut ltrs_with_maximum: [bool; 26] = [false; 26];
-            
-            // encode "positions" section of bitmask, while setting up minimums and maximums for "count" section
-            for i in 0..5usize {
-                let (letter, ltr, color) = (pg[i] as usize, pg[i], colors[i]);
+            let bitmask = build_bitmask(pg, &colors);
 
-                match color {
-                    0 => { //gray
-                        write_bit(&mut bitmask, ltr, i);
-                        ltrs_with_maximum[letter] = true;
-                    }
-                    1 => { //yellow
-                        write_bit(&mut bitmask, ltr, i);
-                        minimum_of_ltr[letter] += 1;
-                    }
-                    2 => { //green
-                        write_row_excluding_bit(&mut bitmask, ltr, i);
-                        minimum_of_ltr[letter] += 1;
-                    }
-                    _ => {panic!()}
-                }  
-            }
-            
-            // encode "count" section of bitmask
-            for i in 0..5usize {
-                let ltr = pg[i] as usize;
-                let min = minimum_of_ltr[ltr] as usize;
-                
-                // what quantities of this letter are disallowed? lets encode it
-                for count in 0..6 { 
-                    if ! if ltrs_with_maximum[ltr] {min == count} else {min <= count} {
-                        // count section is from row 5 - row 10
-                        write_bit(&mut bitmask, ltr as u8, count + 5)
-                    };
-                }
-            }
             // bitmask is finished. lets compare it against every possible secret.
 
             let mut elim: u32 = 0;
@@ -183,7 +203,7 @@ fn solve(PG: &Vec<[u8;5]>, PS: &Vec<[u8; 5]>, BITMAP_CACHE: &HashMap<[u8; 5], [u
             }
             total_elim += elim;
         }
-        let avg_elim: f32 = total_elim as f32 / PS.len() as f32;
+        let avg_elim: f32 = if PS.len() == 0 { 0.0 } else { total_elim as f32 / PS.len() as f32 };
         on_guess_scored(pg, GuessScore { total_elim, avg_elim });
         GS.insert(*pg, GuessScore { total_elim, avg_elim });
     }
@@ -220,6 +240,49 @@ fn build_bitmap(ps: [u8; 5]) -> [u128; 3] {
     }
 
     return bitmap;
+}
+
+/// takes guess and colors and encodes that into an information bitmask
+fn build_bitmask(pg: &[u8; 5], colors: &[u8; 5]) -> [u128; 3] {
+    let mut bitmask: [u128; 3] = [0,0,0]; // 1 bitmap is 26 * 11 bits = 282 bits
+    let mut minimum_of_ltr: [u8; 26] = [0; 26];
+    let mut ltrs_with_maximum: [bool; 26] = [false; 26];
+    
+    // encode "positions" section of bitmask, while setting up minimums and maximums for "count" section
+    for i in 0..5usize {
+        let (letter, ltr, color) = (pg[i] as usize, pg[i], colors[i]);
+
+        match color {
+            0 => { //gray
+                write_bit(&mut bitmask, ltr, i);
+                ltrs_with_maximum[letter] = true;
+            }
+            1 => { //yellow
+                write_bit(&mut bitmask, ltr, i);
+                minimum_of_ltr[letter] += 1;
+            }
+            2 => { //green
+                write_row_excluding_bit(&mut bitmask, ltr, i);
+                minimum_of_ltr[letter] += 1;
+            }
+            _ => {panic!()}
+        }  
+    }
+    
+    // encode "count" section of bitmask
+    for i in 0..5usize {
+        let ltr = pg[i] as usize;
+        let min = minimum_of_ltr[ltr] as usize;
+        
+        // what quantities of this letter are disallowed? lets encode it
+        for count in 0..6 { 
+            if ! if ltrs_with_maximum[ltr] {min == count} else {min <= count} {
+                // count section is from row 5 - row 10
+                write_bit(&mut bitmask, ltr as u8, count + 5)
+            };
+        }
+    }
+    bitmask
 }
 
 fn print_bitmap(bits: &[u128; 3]) {
