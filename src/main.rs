@@ -1,6 +1,11 @@
 use std::{collections::HashMap, fs, io::{self, BufWriter, Error, Write}, sync::mpsc, thread::{self, JoinHandle}, time::{self, Instant}, usize};
 
-static THREADS: usize = 12;
+// TODO! There are 2 bugs.
+// ! 1. why it is slow until like 500 then jumps to 14K in less than a second (time estimation sucks). 2.
+// ! 2. why it says "#1 Guess TORUS eliminates 14834.24 words on average" after you already filtered down to 58 PS using "lares __g_y"
+
+/// how many threads to use for solving (ideally equal to your CPU cores)
+static THREADS: usize = 8;
 static CALCULATE_INITIALLY: bool = false;
 static SHOW_TOP_X_GUESSES: usize = 5;
 static PRINT_WORST_GUESS: bool = true;
@@ -67,7 +72,7 @@ impl GuessScore {
         let elapsed: f64 = start_inst.elapsed().as_secs_f64();
         writeln!(out, "Progress: {:.2}%. Time remaining: {:.0}s. Counted: {} / {}", amount_finished * 100f64, elapsed / amount_finished, counted, total).unwrap();
         
-        out.flush().unwrap();
+        // out.flush().unwrap();
     }
     fn handle_scored_guess(self, GS: &mut HashMap<[u8;5], GuessScore>, pg: &[u8; 5], counted: &mut u32, total: u32, start_inst: &Instant){
         self.print(pg, {*counted += 1; *counted}, total, &start_inst);
@@ -123,7 +128,7 @@ fn main() {
     let mut PS: Vec<[u8; 5]> = PG.clone();
     let BITMAP_CACHE: HashMap<[u8; 5], [u128; 3]> = PS.iter().map(|&word| word).zip(PS.iter().map(|&word| build_bitmap(word))).collect(); // absolute cinema
     
-    let mut PG_SPLITS: Vec<Vec<[u8; 5]>> = (0..THREADS).map(|_| Vec::with_capacity(PG.len()/THREADS+1)).collect();
+    let mut PG_SPLITS: Vec<Vec<[u8; 5]>> = (0..THREADS).map(|_| Vec::with_capacity(PG.len()/THREADS)).collect();
     PG.iter().enumerate().for_each(|(i,item)| PG_SPLITS[i % THREADS].push(*item));
 
     let mut runs: usize = 0;
@@ -138,9 +143,9 @@ fn main() {
         let mut threads = Vec::<JoinHandle<HashMap<[u8; 5], GuessScore>>>::new();
         let start_inst = time::Instant::now(); let mut counted: u32 = 0; let total: u32 = PG.len() as u32;
         println!("Starting {} threads...", THREADS);
-        for i in 1..THREADS {
+        for i in 0..THREADS {
             // need to explicitly define new variables. it won't work if it captures PG_SPLITS or PS, etc. because the thread may start after they're dropped.
-            let cap_tx = tx.clone();
+            let cap_tx: mpsc::Sender<([u8; 5], GuessScore)> = tx.clone();
             let cap_PG_SPLITS = PG_SPLITS[i].clone();
             let cap_PS = PS.clone();
             let cap_BITMAP_CACHE = BITMAP_CACHE.clone();
@@ -151,14 +156,7 @@ fn main() {
         
         prepare_for_printing_guess_scores();
         let mut GS: HashMap<[u8;5], GuessScore> = HashMap::with_capacity(14855);
-        // use the main thread to solve, and check for the other threads' results
-        solve(&PG_SPLITS[0], &PS, &BITMAP_CACHE, |pg, guess_score| {
-            guess_score.handle_scored_guess(&mut GS, pg, &mut counted, total, &start_inst);
-                while let Ok(s) = rx.try_recv() {
-                    s.1.handle_scored_guess(&mut GS, &s.0, &mut counted, total, &start_inst);
-                }
-            }
-        );
+
         // check every little while for new guess scores
         // while waiting for all other threads to complete
         while counted < total {
@@ -170,7 +168,7 @@ fn main() {
         }
 
         let mut GS_VEC = GS.iter().collect::<Vec<(&[u8; 5], &GuessScore)>>();
-        GS_VEC.sort_by(|a,b| (&b.1.total_elim).cmp(&a.1.total_elim));
+        GS_VEC.sort_by(|a: &(&[u8; 5], &GuessScore),b| (&b.1.total_elim).cmp(&a.1.total_elim));
         // print best guesses
         for i in 0..SHOW_TOP_X_GUESSES {
             println!("#{} Guess {} eliminates {:.2} words on average", (i+1), decode_word(GS_VEC[i].0).to_ascii_uppercase(), GS_VEC[i].1.avg_elim);
